@@ -376,6 +376,7 @@ void processUDPClientMessages() {
 		lenBuffer = decipherEvent(buffer, bufferInput, sizeof(bufferInput));
 
 		//buffer[n] = 0;
+		bufferInput[lenBuffer] = 0;
 		fprintf(stderr, "Processing: %s\n", bufferInput);
 
 		jsonObject = json_tokener_parse(bufferInput);
