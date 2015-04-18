@@ -104,8 +104,12 @@ int decipherEvent(char *bufferInput, char *bufferOutput, int lenBufferOutput) {
 	memcpy(&len, pt, sizeof(len));
 	pt += sizeof(len);
 
+	printf("len = %d\n", len);
+
 	memcpy(&numOfBlocks, pt, sizeof(numOfBlocks));
 	pt += sizeof(numOfBlocks);
+
+	printf("num of blocks = %d\n", numOfBlocks);
 
 	for (i = 0; i < numOfBlocks; i ++) {
 
@@ -362,6 +366,7 @@ void processUDPClientMessages() {
 	struct sockaddr_in cliAddr;
 	json_object *jsonObject;
 	char bufferInput[1024];
+	int swapped;
 
 	len = sizeof(cliAddr);
 
@@ -373,10 +378,14 @@ void processUDPClientMessages() {
 		n = recvfrom(sockFDClient, buffer, BUFFER_SIZE, 0,
 				(struct sockaddr *) &cliAddr, &len);
 
-		lenBuffer = decipherEvent(buffer, bufferInput, sizeof(bufferInput));
+		if (buffer[0] == '{') {
+			strcpy(bufferInput, buffer);
+		} else {
+			lenBuffer = decipherEvent(buffer, bufferInput, sizeof(bufferInput));
+			//buffer[n] = 0;
+			bufferInput[lenBuffer] = 0;
+		}
 
-		//buffer[n] = 0;
-		bufferInput[lenBuffer] = 0;
 		fprintf(stderr, "Processing: %s\n", bufferInput);
 
 		jsonObject = json_tokener_parse(bufferInput);
