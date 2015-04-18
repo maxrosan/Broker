@@ -469,7 +469,7 @@ void startThreads() {
 int main(int argc, char **argv) {
 
 	createDbConnection();
-	deleteAll();
+	//deleteAll();
 	loadConfiguration(argv[1]);
 	startThreads();
 	createUDPClientSocket();
