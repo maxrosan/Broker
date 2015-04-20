@@ -153,7 +153,7 @@ void loopEvents() {
 		sendto(sock, buffer, blocks * 8, 0, (const struct sockaddr*) &servAddr, sizeof(servAddr));
 
 		printf("Sending event\n");
-		sleep(10);
+		sleep(3);
 
 	}
 

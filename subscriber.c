@@ -139,7 +139,7 @@ void loopEvents() {
 	srand(time(NULL));
 
 	sprintf(event,
-			"{ \"type\": \"subscribe\", \"attributes\": [ \"place\", \"temperature\" ]  }");
+			"{ \"type\": \"subscribe\", \"which\": \"last\", \"attributes\": [ \"place\", \"temperature\" ]  }");
 
 	blocks = encipherEvent(event, buffer);
 	sendto(sock, buffer, blocks * 8, 0, (const struct sockaddr*) &servAddr, sizeof(servAddr));
@@ -154,6 +154,7 @@ void loopEvents() {
 		lenString = recvfrom(sock, buffer, sizeof buffer, 0, (struct sockaddr*) &cliAddr, &len);
 		lenBuffer = decipherEvent(buffer, bufferInput, sizeof(bufferInput));
 
+		bufferInput[lenBuffer] = 0;
 		printf("Process event: %s\n", bufferInput);
 
 	}
