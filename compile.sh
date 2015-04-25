@@ -22,6 +22,15 @@ elif [ "x$1" == "xsubs" ]; then
 	echo "{ \"type\":\"subscribe\", \"attributes\":[\"X\",\"Y\"] }" | nc -u localhost 10001;
 elif [ "x$1" == "xev" ]; then
 	echo "{ \"type\":\"event\", \"X\":\"1\",\"Y\":\"2\" }" | nc -u localhost 10001;
+elif [ "x$1" == "xrun" ]; then
+
+	nohup ./broker configuration.json &
+	sleep 1
+	nohup ./subscriber_websocket 127.0.0.1 9001 9000 place temperature humidity &
+	sleep 1
+	nohup ./subscriber_websocket 127.0.0.1 9001 9002 place light reed &
+
+
 fi;
 
 

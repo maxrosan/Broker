@@ -17,9 +17,13 @@
 #include "queue.h"
 #include "crypto.h"
 
+#define DEBUG_ENABLE 1
+
 static int PORT = 10001;
+
 #define BUFFER_SIZE 2048
 #define PERIOD_TO_DELETE_OLD_SUBSCRIBERS (3600 * 2)
+#define DEBUG(MSG, ...) if (DEBUG_ENABLE) printf(MSG "\n", ## __VA_ARGS__)
 
 static int sockFDClient;
 static struct sockaddr_in servAddr;
@@ -45,9 +49,6 @@ void createDbConnection() {
 void deleteAll() {
 
 	char sqlFormat[250];
-
-	//sprintf(sqlFormat, "DELETE FROM event");
-	//sqError = sqlite3_exec(sqConn, sqlFormat, 0, 0, 0);
 
 	sprintf(sqlFormat, "DELETE FROM subscriber");
 	sqError = sqlite3_exec(sqConn, sqlFormat, 0, 0, 0);
@@ -240,6 +241,9 @@ void processEvent(struct sockaddr_in cliAddr, json_object *jsonObject) {
 
 		switch (json_object_get_type(val)) {
 		case json_type_string:
+
+			DEBUG("[%s] = [%s]", key, json_object_get_string(val));
+
 			insertEventAttribute(timeVal, keyMd5Table, key,
 					json_object_get_string(val));
 			break;
@@ -247,7 +251,11 @@ void processEvent(struct sockaddr_in cliAddr, json_object *jsonObject) {
 
 	}
 
+	DEBUG("Event interpreted");
+
 	sendEvent(keyMd5Table, jsonObject);
+
+	DEBUG("Event being processed");
 
 }
 
@@ -502,9 +510,15 @@ void* _threadConsumer(void *arg) {
 
 	while (1) {
 
+		DEBUG("Waiting event to the subscribers...");
+
 		entry = queuePop(1);
 
+		DEBUG("Preparing interpreter...");
+
 		interpreterPrepare(interpreter);
+
+		DEBUG("Getting subscribers...");
 
 		sprintf(sqFormat,
 				"SELECT time, ip, port, hash, condition FROM subscriber WHERE hash = '%s'",
@@ -515,6 +529,8 @@ void* _threadConsumer(void *arg) {
 		jsonObject = json_tokener_parse(entry->event);
 
 		json_object_object_foreach(jsonObject, key, val) {
+
+			DEBUG("attribute %s = %s", key, json_object_get_string(val));
 
 			interpreterAddVariable(interpreter, key, json_object_get_string(val));
 
@@ -555,8 +571,8 @@ void* _threadConsumer(void *arg) {
 
 void startThreads() {
 
-	pthread_create(&threadOldestEntries, NULL, _threadDeleteOldEntries, NULL);
 	pthread_create(&threadConsumer, NULL, _threadConsumer, NULL);
+	pthread_create(&threadOldestEntries, NULL, _threadDeleteOldEntries, NULL);
 
 }
 
