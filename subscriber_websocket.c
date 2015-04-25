@@ -29,6 +29,7 @@ uint32_t key[4] = { 31231234, 412334, 12341, 657657 };
 
 pthread_mutex_t lock;
 char *event = NULL;
+time_t lastUpdate = 0;
 
 void createUDPSocket() {
 
@@ -146,6 +147,10 @@ static int callback_event(struct libwebsocket_context * this,
 			libwebsocket_callback_on_writable(this, wsi);
 
 			//queueFreeEntry(entry);
+			free(event);
+
+			event = NULL;
+
 		}
 
 		pthread_mutex_unlock(&lock);
