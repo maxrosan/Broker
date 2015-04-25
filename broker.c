@@ -10,12 +10,15 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sqlite3.h>
+#include <assert.h>
 
+#include "interpreter.h"
 #include "md5.h"
+#include "queue.h"
+#include "crypto.h"
 
 static int PORT = 10001;
 #define BUFFER_SIZE 2048
-#define QUEUE_SIZE 1024
 
 static int sockFDClient;
 static struct sockaddr_in servAddr;
@@ -25,195 +28,7 @@ static sqlite3_stmt *sqRes;
 static int sqError;
 static pthread_t threadOldestEntries, threadConsumer;
 
-uint32_t key[4] = { 31231234, 412334, 12341, 657657 };
-
-typedef struct _queueEntry {
-
-	char *hash;
-	char *event;
-
-} queueEntry;
-
-static pthread_mutex_t queueMutex;
-static pthread_cond_t queueCond;
-static int queueHead, queueTail, queueSize;
-
-queueEntry* queueEntries[QUEUE_SIZE];
-
 void* _threadSendOldEvents(void *arg);
-
-void queuePush(char *hash, char *event) {
-
-	queueEntry* entry;
-
-	if (queueSize == QUEUE_SIZE) {
-		return;
-	}
-
-	entry = (queueEntry*) malloc(sizeof(queueEntry));
-
-	entry->hash = strdup(hash);
-	entry->event = strdup(event);
-
-	pthread_mutex_lock(&queueMutex);
-
-	queueEntries[queueHead] = entry;
-
-	queueHead = (queueHead + 1) % QUEUE_SIZE;
-	queueSize++;
-
-	if (queueSize == 1) {
-		pthread_cond_broadcast(&queueCond);
-	}
-
-	pthread_mutex_unlock(&queueMutex);
-
-	printf("pushed\n");
-
-}
-
-queueEntry* queuePop(int waitForNewEntry) {
-
-	queueEntry* entry = NULL;
-
-	pthread_mutex_lock(&queueMutex);
-
-	do {
-
-		if (queueSize > 0) {
-
-			entry = queueEntries[queueTail];
-			queueTail = (queueTail + 1) % QUEUE_SIZE;
-			queueSize--;
-
-			waitForNewEntry = 0;
-
-		} else {
-
-			if (waitForNewEntry) {
-				pthread_cond_wait(&queueCond, &queueMutex);
-			}
-
-		}
-
-	} while (waitForNewEntry);
-
-	pthread_mutex_unlock(&queueMutex);
-
-	return entry;
-
-}
-
-void queueFreeEntry(queueEntry *entry) {
-
-	free(entry->hash);
-	free(entry->event);
-	free(entry);
-
-}
-
-void encipher(unsigned int num_rounds, uint32_t v[2], uint32_t const key[4]) {
-	unsigned int i;
-	uint32_t v0 = v[0], v1 = v[1], sum = 0, delta = 0x9E3779B9;
-	for (i = 0; i < num_rounds; i++) {
-		v0 += (((v1 << 4) ^ (v1 >> 5)) + v1) ^ (sum + key[sum & 3]);
-		sum += delta;
-		v1 += (((v0 << 4) ^ (v0 >> 5)) + v0) ^ (sum + key[(sum >> 11) & 3]);
-	}
-	v[0] = v0;
-	v[1] = v1;
-}
-
-void decipher(unsigned int num_rounds, uint32_t v[2], uint32_t const key[4]) {
-	unsigned int i;
-	uint32_t v0 = v[0], v1 = v[1], delta = 0x9E3779B9, sum = delta * num_rounds;
-	for (i = 0; i < num_rounds; i++) {
-		v1 -= (((v0 << 4) ^ (v0 >> 5)) + v0) ^ (sum + key[(sum >> 11) & 3]);
-		sum -= delta;
-		v0 -= (((v1 << 4) ^ (v1 >> 5)) + v1) ^ (sum + key[sum & 3]);
-	}
-	v[0] = v0;
-	v[1] = v1;
-}
-
-int encipherEvent(char *eventBuffer, char *bufferOutput) {
-
-	char buffer[8];
-	int len, numOfBlocks, i, j;
-	char *pt;
-
-	len = strlen(eventBuffer);
-	numOfBlocks = (len / 8) * 8 + ((len % 8) == 0 ? 0 : 1);
-
-	pt = bufferOutput;
-
-	memcpy(pt, &len, sizeof(len));
-	pt += sizeof(len);
-
-	memcpy(pt, &numOfBlocks, sizeof(numOfBlocks));
-	pt += sizeof(numOfBlocks);
-
-	for (i = 0; i < len; i += 8) {
-
-		bzero(buffer, sizeof buffer);
-		for (j = 0; j < 8; j++) {
-			if ((i + j) < len) {
-				buffer[j] = eventBuffer[i + j];
-			}
-		}
-
-		encipher(32, (uint32_t*) buffer, key);
-		memcpy(pt, buffer, 8);
-		pt += 8;
-
-	}
-
-	encipher(32, bufferOutput, key);
-
-	return numOfBlocks;
-
-}
-
-int decipherEvent(char *bufferInput, char *bufferOutput, int lenBufferOutput) {
-
-	char buffer[8];
-	int len, numOfBlocks, i, j;
-	char *pt, *ptOutput;
-
-	bzero(bufferOutput, lenBufferOutput);
-
-	pt = bufferInput;
-	ptOutput = bufferOutput;
-
-	decipher(32, pt, key);
-
-	memcpy(&len, pt, sizeof(len));
-	pt += sizeof(len);
-
-	printf("len = %d\n", len);
-
-	memcpy(&numOfBlocks, pt, sizeof(numOfBlocks));
-	pt += sizeof(numOfBlocks);
-
-	printf("num of blocks = %d\n", numOfBlocks);
-
-	for (i = 0; i < numOfBlocks; i++) {
-
-		bzero(buffer, sizeof buffer);
-
-		memcpy(buffer, pt, 8);
-		decipher(32, (uint32_t*) buffer, key);
-
-		memcpy(ptOutput, buffer, 8);
-
-		pt += 8;
-		ptOutput += 8;
-
-	}
-
-	return len;
-
-}
 
 void createDbConnection() {
 
@@ -249,7 +64,7 @@ void insertEventAttribute(time_t time, char *hash, char *attr, char *value) {
 
 }
 
-void insertSubscriber(char *ip, int port, char *hash) {
+void insertSubscriber(char *ip, int port, char *hash, char *condition) {
 
 	char sqlFormat[250];
 
@@ -263,8 +78,10 @@ void insertSubscriber(char *ip, int port, char *hash) {
 
 	sqError = sqlite3_exec(sqConn, sqlFormat, 0, 0, 0);
 
-	sprintf(sqlFormat, "INSERT INTO subscriber VALUES ('%ld','%s','%d','%s')",
-			timeVal, ip, port, hash);
+	sprintf(sqlFormat, "INSERT INTO subscriber VALUES (\"%ld\", \"%s\", \"%d\", \"%s\", \"%s\")",
+			timeVal, ip, port, hash, condition);
+
+	printf(sqlFormat);
 
 	sqError = sqlite3_exec(sqConn, sqlFormat, 0, 0, 0);
 
@@ -309,6 +126,7 @@ typedef struct _eventToSend {
 	char *hash;
 	char *address;
 	int port;
+	char *condition;
 
 } eventToSend;
 
@@ -320,7 +138,7 @@ void subscribe(struct sockaddr_in cliAddr, json_object *jsonObject) {
 	unsigned char md5Result[16];
 	json_object *attributesObj, *val;
 	int arrayLen, i;
-	char *valArray, *whichEntrisToSend;
+	char *valArray, *whichEntrisToSend, *condition;
 	MD5_CTX mdContext;
 
 	port = ntohs(cliAddr.sin_port);
@@ -328,6 +146,8 @@ void subscribe(struct sockaddr_in cliAddr, json_object *jsonObject) {
 	get_ip_str(((const struct sockaddr*) &cliAddr), ipString, sizeof ipString);
 
 	whichEntrisToSend = json_object_get_string(json_object_object_get(jsonObject, "which"));
+
+	condition = json_object_get_string(json_object_object_get(jsonObject, "condition"));
 
 	attributesObj = json_object_object_get(jsonObject, "attributes");
 	arrayLen = json_object_array_length(attributesObj);
@@ -351,7 +171,7 @@ void subscribe(struct sockaddr_in cliAddr, json_object *jsonObject) {
 			md5Result[8], md5Result[9], md5Result[10], md5Result[11],
 			md5Result[12], md5Result[13], md5Result[14], md5Result[15]);
 
-	insertSubscriber(ipString, port, keyMd5Table);
+	insertSubscriber(ipString, port, keyMd5Table, condition);
 
 	if (whichEntrisToSend != NULL && strcmp(whichEntrisToSend, "all") == 0) {
 
@@ -362,6 +182,7 @@ void subscribe(struct sockaddr_in cliAddr, json_object *jsonObject) {
 		event->port = port;
 		event->hash = strdup(keyMd5Table);
 		event->oldestEventToSend = 0;
+		event->condition = strdup(condition);
 
 		pthread_create(&dispatchRequestOldEvents, NULL, _threadSendOldEvents, (void*) event);
 		pthread_detach(dispatchRequestOldEvents);
@@ -435,7 +256,8 @@ void processUDPClientMessages() {
 		__BEGIN_TYPE, EventT, SubscribeT, __END_TYPE
 	};
 
-	int len, n, typeVal, lenBuffer;
+	int len, n, typeVal, lenBuffer,
+	 keepReceiving = 1;
 	struct sockaddr_in cliAddr;
 	json_object *jsonObject;
 	char bufferInput[1024];
@@ -443,13 +265,18 @@ void processUDPClientMessages() {
 
 	len = sizeof(cliAddr);
 
-	while (1) {
+	while (keepReceiving) {
 
 		memset(buffer, 0, sizeof buffer);
 		memset(bufferInput, 0, sizeof bufferInput);
 
 		n = recvfrom(sockFDClient, buffer, BUFFER_SIZE, 0,
 				(struct sockaddr *) &cliAddr, &len);
+
+		if (n == -1) {
+			keepReceiving = 0;
+			continue;
+		}
 
 		if (buffer[0] == '{') {
 			strcpy(bufferInput, buffer);
@@ -546,6 +373,25 @@ void *_threadDeleteOldEntries(void *arg) {
 
 }
 
+void sendMessageTo(char *ip, int port, char *entry) {
+
+	struct sockaddr_in sa;
+	char bufferXTEA[1024];
+	int blocks;
+
+	bzero(&sa, sizeof(sa));
+
+	sa.sin_family = AF_INET;
+	sa.sin_addr.s_addr = inet_addr(ip);
+	sa.sin_port = htons(port);
+
+	blocks = encipherEvent(entry, bufferXTEA);
+
+	sendto(sockFDClient, bufferXTEA, blocks * 8, 0,
+			(struct sockaddr*) &sa, sizeof(sa));
+
+}
+
 void* _threadSendOldEvents(void *arg) {
 
 	time_t timeVal, timeEntry = 0, lastTime = 0;
@@ -555,9 +401,9 @@ void* _threadSendOldEvents(void *arg) {
 	char *attrName, *attrVal;
 	char* attributes[30][256], attributesValues[30][256];
 	int numberOfAttributes = 0, i;
-	struct sockaddr_in sa;
-	char bufferXTEA[1024], bufferAttr[256], bufferEvent[1024];
+	char bufferAttr[256], bufferEvent[1024];
 	int blocks;
+	Interpreter *interpreter;
 
 	eventToSend *event = (eventToSend*) arg;
 
@@ -573,10 +419,8 @@ void* _threadSendOldEvents(void *arg) {
 
 	printf("Sending old events [%s]\n", sqFormat);
 
-	bzero(&sa, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_addr.s_addr = inet_addr(event->address);
-	sa.sin_port = htons(event->port);
+	interpreter = interpreterCreate();
+	interpreterPrepare(interpreter);
 
 	while (sqlite3_step(res) == SQLITE_ROW) {
 
@@ -594,6 +438,8 @@ void* _threadSendOldEvents(void *arg) {
 
 			for (i = 0; i < numberOfAttributes; i++) {
 
+				interpreterAddVariable(interpreter, attributes[i], attributesValues[i]);
+
 				if (i < (numberOfAttributes - 1)) {
 					sprintf(bufferAttr, "\"%s\": \"%s\", ", attributes[i], attributesValues[i]);
 				} else {
@@ -602,19 +448,17 @@ void* _threadSendOldEvents(void *arg) {
 
 				strcat(bufferEvent, bufferAttr);
 
-				//free(attributes[i]);
-				//free(attributesValues[i]);
-
 			}
 
 			strcat(bufferEvent, "}");
 
-			printf("Sending old event: %s\n", bufferEvent);
+			printf("Sending old event: %s [%s]\n", bufferEvent, event->condition);
 
-			bzero(bufferXTEA, sizeof bufferXTEA);
-			blocks = encipherEvent(bufferEvent, bufferXTEA);
-			sendto(sockFDClient, bufferXTEA, blocks * 8, 0,
-					(struct sockaddr*) &sa, sizeof(sa));
+			if (interpreterGetConditionValue(interpreter, event->condition)) {
+
+				sendMessageTo(event->address, event->port, bufferEvent);
+
+			}
 
 			numberOfAttributes = 0;
 
@@ -629,10 +473,13 @@ void* _threadSendOldEvents(void *arg) {
 
 	}
 
+	interpreterFree(interpreter);
+
 	sqlite3_finalize(res);
 
 	free(event->address);
 	free(event->hash);
+	free(event->condition);
 	free(event);
 
 }
@@ -643,42 +490,58 @@ void* _threadConsumer(void *arg) {
 	char sqFormat[200];
 	const char *tail;
 	sqlite3_stmt *res;
-	struct sockaddr_in sa;
-	char bufferXTEA[1024];
 	int blocks;
+	json_object *jsonObject;
+	time_t timeVal;
+	char *ip, *hash, *condition;
+	int port, sendToSubscriber;
+	Interpreter *interpreter;
+
+	interpreter = interpreterCreate();
 
 	while (1) {
 
-		printf("Waiting event to process\n");
 		entry = queuePop(1);
 
-		printf("Processing\n");
+		interpreterPrepare(interpreter);
 
 		sprintf(sqFormat,
-				"SELECT time, ip, port, hash FROM subscriber WHERE hash = '%s'",
+				"SELECT time, ip, port, hash, condition FROM subscriber WHERE hash = '%s'",
 				entry->hash);
 
 		sqError = sqlite3_prepare_v2(sqConn, sqFormat, 1000, &res, &tail);
 
-		while (sqlite3_step(res) == SQLITE_ROW) {
+		jsonObject = json_tokener_parse(entry->event);
 
-			time_t timeVal = (time_t) sqlite3_column_int(res, 0);
-			char *ip = sqlite3_column_text(res, 1);
-			int port = sqlite3_column_int(res, 2);
-			char *hash = sqlite3_column_text(res, 3);
+		json_object_object_foreach(jsonObject, key, val) {
 
-			printf("sendto %s %d\n", ip, port);
-
-			bzero(&sa, sizeof(sa));
-			sa.sin_family = AF_INET;
-			sa.sin_addr.s_addr = inet_addr(ip);
-			sa.sin_port = htons(port);
-
-			blocks = encipherEvent(entry->event, bufferXTEA);
-			sendto(sockFDClient, bufferXTEA, blocks * 8, 0,
-					(struct sockaddr*) &sa, sizeof(sa));
+			interpreterAddVariable(interpreter, key, json_object_get_string(val));
 
 		}
+
+		json_object_put(jsonObject);
+
+		while (sqlite3_step(res) == SQLITE_ROW) {
+
+			timeVal = (time_t) sqlite3_column_int(res, 0);
+			ip = sqlite3_column_text(res, 1);
+			port = sqlite3_column_int(res, 2);
+			hash = sqlite3_column_text(res, 3);
+			condition = sqlite3_column_text(res, 4);
+			sendToSubscriber = 0;
+
+			sendToSubscriber = interpreterGetConditionValue(interpreter, condition);
+
+			if (sendToSubscriber) {
+				printf("sendto %s %d\n", ip, port);
+
+				sendMessageTo(ip, port, entry->event);
+			}
+
+
+		}
+
+		interpreterFree(interpreter);
 
 		sqlite3_finalize(res);
 
@@ -687,15 +550,6 @@ void* _threadConsumer(void *arg) {
 	}
 
 	return NULL;
-}
-
-void prepareQueue() {
-
-	pthread_mutex_init(&queueMutex, NULL);
-	pthread_cond_init(&queueCond, NULL);
-
-	queueHead = queueTail = queueSize = 0;
-
 }
 
 void startThreads() {
@@ -707,6 +561,8 @@ void startThreads() {
 
 int main(int argc, char **argv) {
 
+	interpreterGlobalLoad();
+
 	prepareQueue();
 	createDbConnection();
 	deleteAll();
@@ -714,6 +570,8 @@ int main(int argc, char **argv) {
 	startThreads();
 	createUDPClientSocket();
 	processUDPClientMessages();
+
+	interpreterGlobalUnload();
 
 	return EXIT_SUCCESS;
 

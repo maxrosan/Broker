@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script
+	src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+<script src="Chart.js"></script>
+<script type="text/javascript">
+        
+        	var lineTemperatureChart;
+        	var lineHumidityChart;
+        	var lineBatteryChart;
+        	var lineLuminosityChart;
+        	var countTemperature = 0;
+        	var countBattery = 0;
+        	var countLuminosity = 0;
+        
+            $(function() {
+            	
+                var data = {
+                	    labels: [ ],
+                	    datasets: [
+                	        {
+                	            label: "Temperature",
+                	            fillColor: "rgba(220,220,220,0.2)",
+                	            strokeColor: "rgba(220,220,220,1)",
+                	            pointColor: "rgba(220,220,220,1)",
+                	            pointStrokeColor: "#fff",
+                	            pointHighlightFill: "#fff",
+                	            pointHighlightStroke: "rgba(220,220,220,1)",
+                	            data: [ ]
+                	        }
+                	    ]
+                	};            	
+            	
+               lineTemperatureChart = new Chart(document.getElementById("chartTemperature").getContext("2d")).Line(data, []);            	
+               lineHumidityChart = new Chart(document.getElementById("chartHumidity").getContext("2d")).Line(data, []);
+               lineBatteryChart = new Chart(document.getElementById("chartBattery").getContext("2d")).Line(data, []);
+               lineLuminosityChart = new Chart(document.getElementById("chartLuminosity").getContext("2d")).Line(data, []);
+               
+               window.WebSocket = window.WebSocket || window.MozWebSocket;
+
+                var websocketTemperature = new WebSocket('ws://45.55.166.187:9000/',
+                                              'event-protocol');
+                
+                var websocketBattery = new WebSocket('ws://45.55.166.187:9001/',
+                'event-protocol');                
+                
+                var websocketLuminosity = new WebSocket('ws://45.55.166.187:9002/',
+                'event-protocol');                                
+
+                websocketTemperature.onmessage = function (message) {
+                	var date;
+                    
+                    date = new Date();
+                    
+                    obj = JSON.parse(message.data);
+                    
+                    lineTemperatureChart.addData([obj.temperature], 
+                    		date.getHours() + ":" + 
+                    		date.getMinutes() + ":" + 
+                    		date.getSeconds());
+                    
+                    lineHumidityChart.addData([obj.humidity], 
+                    		date.getHours() + ":" + 
+                    		date.getMinutes() + ":" + 
+                    		date.getSeconds());
+                    
+					if (countTemperature == 15) {
+						
+						lineTemperatureChart.removeData();
+						lineHumidityChart.removeData();
+						
+					} else {
+						countTemperature++;
+					}
+					  
+                };
+                
+                websocketBattery.onmessage = function (message) {
+                	var date;
+                    
+                    date = new Date();
+                    
+                    obj = JSON.parse(message.data);
+                    
+                    lineBatteryChart.addData([obj.battery], 
+                    		date.getHours() + ":" + 
+                    		date.getMinutes() + ":" + 
+                    		date.getSeconds());
+                    
+					if (countLuminosity == 15) {
+						
+						lineBatteryChart.removeData();
+						
+					} else {
+						countBattery++;
+					}
+					  
+                };
+                
+                websocketLuminosity.onmessage = function (message) {
+                	var date;
+                    
+                    date = new Date();
+                    
+                    obj = JSON.parse(message.data);
+                    
+                    lineLuminosityChart.addData([obj.light], 
+                    		date.getHours() + ":" + 
+                    		date.getMinutes() + ":" + 
+                    		date.getSeconds());
+                    
+					if (countLuminosity == 15) {
+						
+						lineLuminosityChart.removeData();
+						
+					} else {
+						countLuminosity++;
+					}
+					  
+                };                
+                
+            });
+        </script>
+</head>
+<body>
+
+	<div align="center">
+		<h2>Temperatura</h2>
+		<canvas id="chartTemperature" width="600" height="400"></canvas>
+	</div>
+	<br />
+
+	<div align="center">
+		<h2>Umidade</h2>
+		<canvas id="chartHumidity" width="600" height="400"></canvas>
+	</div>
+	<br />
+
+	<div align="center">
+		<h2>Bateria</h2>
+		<canvas id="chartBattery" width="600" height="400"></canvas>
+	</div>
+	<br />
+
+	<div align="center">
+		<h2>Luminosidade</h2>
+		<canvas id="chartLuminosity" width="600" height="400"></canvas>
+	</div>
+	<br />
+
+</body>
+</html>

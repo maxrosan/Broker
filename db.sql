@@ -10,5 +10,6 @@ create table if not exists subscriber (
         time              integer,
         ip                varchar(256),
         port              integer,
-        hash              text
+        hash              text,
+	condition         text
 );

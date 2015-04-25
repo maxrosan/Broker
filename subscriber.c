@@ -14,7 +14,7 @@
 int sock;
 struct sockaddr_in servAddr;
 int port;
-char *ipAddr;
+char *ipAddr, *condition;
 
 uint32_t key[4] = {
 		31231234, 412334, 12341, 657657
@@ -139,7 +139,8 @@ void loopEvents() {
 	srand(time(NULL));
 
 	sprintf(event,
-			"{ \"type\": \"subscribe\", \"which\": \"last\", \"attributes\": [ \"place\", \"temperature\" ]  }");
+			"{ \"type\": \"subscribe\", \"condition\": \"%s\", \"which\": \"all\", \"attributes\": "
+			"[ \"place\", \"temperature\" ]   }", condition);
 
 	blocks = encipherEvent(event, buffer);
 	sendto(sock, buffer, blocks * 8, 0, (const struct sockaddr*) &servAddr, sizeof(servAddr));
@@ -165,6 +166,7 @@ int main(int argc, char **argv) {
 
 	ipAddr = strdup(argv[1]);
 	port = atoi(argv[2]);
+	condition = strdup(argv[3]);
 
 	createUDPSocket();
 	loopEvents();
