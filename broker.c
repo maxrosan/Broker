@@ -19,6 +19,7 @@
 
 static int PORT = 10001;
 #define BUFFER_SIZE 2048
+#define PERIOD_TO_DELETE_OLD_SUBSCRIBERS (3600 * 2)
 
 static int sockFDClient;
 static struct sockaddr_in servAddr;
@@ -362,11 +363,11 @@ void *_threadDeleteOldEntries(void *arg) {
 		oldestEventTime = time(NULL);
 
 		sprintf(sqlFormat, "DELETE FROM subscriber WHERE time < '%ld'",
-				oldestEventTime - 3600 * 2);
+				oldestEventTime - PERIOD_TO_DELETE_OLD_SUBSCRIBERS);
 
 		sqError = sqlite3_exec(sqConn, sqlFormat, 0, 0, 0);
 
-		sleep(1800);
+		sleep(PERIOD_TO_DELETE_OLD_SUBSCRIBERS);
 	}
 
 	return NULL;

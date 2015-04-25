@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <libwebsockets.h>
 #include <time.h>
@@ -25,11 +26,17 @@ int port;
 char *ipAddr;
 char parametersList[1024];
 
+
 uint32_t key[4] = { 31231234, 412334, 12341, 657657 };
 
 pthread_mutex_t lock;
 char *event = NULL;
-time_t lastUpdate = 0;
+
+suseconds_t lastUpdate = 0;
+
+struct per_session_data__event {
+	suseconds_t timeOfLastEventSent;
+};
 
 void createUDPSocket() {
 
@@ -58,7 +65,7 @@ void *_threadSubscribe(void *arg) {
 		sendto(sock, buffer, blocks * 8, 0, (const struct sockaddr*) &servAddr,
 				sizeof(servAddr));
 
-		sleep(1800 + 10);
+		sleep(3600 * 2 + 10);
 
 	}
 
@@ -70,13 +77,12 @@ void *_threadMessage(void *arg) {
 	char buffer[1024], bufferInput[1024];
 	int blocks;
 	struct sockaddr_in cliAddr;
-	int len = sizeof(cliAddr), lenString, lenBuffer;
+	int len, lenString, lenBuffer;
+	struct timeval timeValue;
 
-	srand(time(NULL));
+	len = sizeof(cliAddr);
 
 	while (1) {
-
-		printf("Waiting event\n");
 
 		lenString = recvfrom(sock, buffer, sizeof buffer, 0,
 				(struct sockaddr*) &cliAddr, &len);
@@ -89,9 +95,6 @@ void *_threadMessage(void *arg) {
 		lenBuffer = decipherEvent(buffer, bufferInput, sizeof(bufferInput));
 
 		bufferInput[lenBuffer] = 0;
-		printf("Process event: %s\n", bufferInput);
-
-		//queuePush("NULL", bufferInput);
 
 		pthread_mutex_lock(&lock);
 
@@ -100,6 +103,10 @@ void *_threadMessage(void *arg) {
 		}
 
 		event = strdup(bufferInput);
+
+		gettimeofday(&timeValue, NULL);
+
+		lastUpdate = timeValue.tv_usec;
 
 		pthread_mutex_unlock(&lock);
 
@@ -120,36 +127,39 @@ static int callback_event(struct libwebsocket_context * this,
 		struct libwebsocket *wsi, enum libwebsocket_callback_reasons reason,
 		void *user, void *in, size_t len) {
 
-	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 512 +
+	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING
+					  + 512 +
 	LWS_SEND_BUFFER_POST_PADDING];
+	unsigned char *p;
+	struct per_session_data__event *userSession;
 
-	unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
+	p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
+	userSession = (struct per_session_data__event *) user;
 
 	switch (reason) {
 
 	case LWS_CALLBACK_ESTABLISHED: // just log message that someone is connecting
-		printf("connection established\n");
+
 		libwebsocket_callback_on_writable(this, wsi);
+
+		userSession->timeOfLastEventSent = 0;
+
 		break;
 
 	case LWS_CALLBACK_SERVER_WRITEABLE: {
 
-		char buffer[1024];
-
-		//queueEntry* entry = queuePop(0);
+		int n;
 
 		pthread_mutex_lock(&lock);
 
-		if (event != NULL) {
+		if (event != NULL && userSession->timeOfLastEventSent < lastUpdate) {
 
-			int n = sprintf((char*) p, "%s", event);
+			userSession->timeOfLastEventSent = lastUpdate;
+
+			n = sprintf((char*) p, "%s", event);
+
 			libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
 			libwebsocket_callback_on_writable(this, wsi);
-
-			//queueFreeEntry(entry);
-			free(event);
-
-			event = NULL;
 
 		}
 
@@ -165,29 +175,41 @@ static int callback_event(struct libwebsocket_context * this,
 }
 
 static struct libwebsocket_protocols protocols[] = {
-/* first protocol must always be HTTP handler */
-{ "http-only",   // name
-		callback_http, // callback
-		0              // per_session_data_size
-		}, { "event-protocol", // protocol name - very important!
-				callback_event,   // callback
-				0                          // we don't use any per session data
 
-		}, {
-		NULL, NULL, 0 /* End of list */
-		} };
+{ "http-only",
+  callback_http,
+   0,
+   0
+},
+
+{
+  "event-protocol",
+  callback_event,
+  sizeof(struct per_session_data__event),
+  0
+ },
+
+ {
+   NULL, NULL, 0, 0
+ }
+
+};
 
 int main(int argc, char **argv) { // ./subscriber_websocket ip_server port_broker port_ws attr1 attr2 ...
 
-	ipAddr = strdup(argv[1]);
-	port = atoi(argv[2]);
-
-	int portWS = atoi(argv[3]), i;
 	struct libwebsocket_context *context;
 	struct lws_context_creation_info info;
 	pthread_t threadMessage;
 	pthread_t threadSubscribe;
 	char bufferParam[512];
+	int portWS, i;
+	unsigned int oldus;
+	int poll_ret;
+
+	ipAddr = strdup(argv[1]);
+	port = atoi(argv[2]);
+
+	portWS = atoi(argv[3]);
 
 	strcpy(parametersList, "");
 
@@ -216,8 +238,8 @@ int main(int argc, char **argv) { // ./subscriber_websocket ip_server port_broke
 	info.user = NULL;
 	info.ka_interval = info.ka_probes = info.ka_time = 0;
 
-	//prepareQueue();
 	pthread_mutex_init(&lock, NULL);
+
 	event = NULL;
 	createUDPSocket();
 
@@ -231,11 +253,32 @@ int main(int argc, char **argv) { // ./subscriber_websocket ip_server port_broke
 		return -1;
 	}
 
-	printf("starting server...\n");
+	oldus = 0;
 
 	while (1) {
 
-		libwebsocket_service(context, 50);
+        struct timeval tv;
+
+        gettimeofday(&tv, NULL);
+
+        if (oldus == 0) {
+        	oldus = tv.tv_sec;
+        }
+
+        if (((unsigned int) tv.tv_sec - oldus) > 5) {
+
+        	oldus = tv.tv_sec;
+
+        	libwebsocket_callback_on_writable_all_protocol(&protocols[1]);
+
+        }
+
+		poll_ret = libwebsocket_service(context, 50);
+
+		if (poll_ret < 0)
+		{
+			fprintf(stderr, "Poll error! %d, %s\n", errno, strerror(errno));
+		}
 
 	}
 
