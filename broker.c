@@ -402,7 +402,7 @@ void* _threadSendOldEvents(void *arg) {
 	char *attrName, *attrVal;
 	char* attributes[30][256], attributesValues[30][256];
 	int numberOfAttributes = 0, i;
-	char bufferAttr[256], bufferEvent[1024];
+	char bufferAttr[1024], bufferEvent[1024];
 	int blocks;
 	Interpreter *interpreter;
 
@@ -465,8 +465,8 @@ void* _threadSendOldEvents(void *arg) {
 
 		}
 
-		strcpy(attributes[numberOfAttributes], strdup(attrName));
-		strcpy(attributesValues[numberOfAttributes], strdup(attrVal));
+		strcpy(attributes[numberOfAttributes], attrName);
+		strcpy(attributesValues[numberOfAttributes], attrVal);
 
 		numberOfAttributes++;
 
