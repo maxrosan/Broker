@@ -24,6 +24,9 @@ elif [ "x$1" == "xev" ]; then
 	echo "{ \"type\":\"event\", \"X\":\"1\",\"Y\":\"2\" }" | nc -u localhost 10001;
 elif [ "x$1" == "xrun" ]; then
 
+	killall -9 broker
+	killall subscriber_websocket
+
 	nohup ./broker configuration.json &
 	sleep 1
 	nohup ./subscriber_websocket 127.0.0.1 9001 9000 place temperature humidity &
