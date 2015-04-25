@@ -28,7 +28,7 @@ char parametersList[1024];
 uint32_t key[4] = { 31231234, 412334, 12341, 657657 };
 
 pthread_mutex_t lock;
-char *event;
+char *event = NULL;
 
 void createUDPSocket() {
 
@@ -94,6 +94,10 @@ void *_threadMessage(void *arg) {
 
 		pthread_mutex_lock(&lock);
 
+		if (event != NULL) {
+			free(event);
+		}
+
 		event = strdup(bufferInput);
 
 		pthread_mutex_unlock(&lock);
@@ -140,10 +144,6 @@ static int callback_event(struct libwebsocket_context * this,
 			int n = sprintf((char*) p, "%s", event);
 			libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
 			libwebsocket_callback_on_writable(this, wsi);
-
-			event = NULL;
-
-			free(event);
 
 			//queueFreeEntry(entry);
 		}
