@@ -25,5 +25,6 @@ void prepareQueue();
 void queuePush(char *hash, char *event);
 queueEntry* queuePop(int waitForNewEntry);
 void queueFreeEntry(queueEntry *entry);
+void queueDontWaitMore();
 
 #endif

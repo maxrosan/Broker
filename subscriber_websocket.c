@@ -278,6 +278,7 @@ int main(int argc, char **argv) { // ./subscriber_websocket ip_server port_broke
 		if (poll_ret < 0)
 		{
 			fprintf(stderr, "Poll error! %d, %s\n", errno, strerror(errno));
+			break;
 		}
 
 	}

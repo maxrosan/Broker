@@ -71,6 +71,10 @@ queueEntry* queuePop(int waitForNewEntry) {
 
 			if (waitForNewEntry) {
 				pthread_cond_wait(&queueCond, &queueMutex);
+
+				if (queueSize == 0) {
+					waitForNewEntry = 0; // Program is about to quit
+				}
 			}
 
 		}
@@ -91,3 +95,14 @@ void queueFreeEntry(queueEntry *entry) {
 
 }
 
+void queueDontWaitMore() {
+
+	pthread_mutex_lock(&queueMutex);
+
+	if (queueSize == 0) {
+		pthread_cond_broadcast(&queueCond);
+	}
+
+	pthread_mutex_unlock(&queueMutex);
+
+}

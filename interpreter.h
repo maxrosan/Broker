@@ -22,7 +22,7 @@ typedef struct _Interpreter {
 
 void interpreterGlobalLoad();
 void interpreterGlobalUnload();
-Interpreter *interpreterCreate();
+void interpreterCreate(Interpreter *interpreter);
 void interpreterAddVariable(Interpreter *interpreter, char *name, char *value);
 int interpreterGetConditionValue(Interpreter *interpreter, char *condition);
 void interpreterFree(Interpreter *interpreter);

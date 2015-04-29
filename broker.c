@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <sqlite3.h>
 #include <assert.h>
+#include <signal.h>
 
 #include "interpreter.h"
 #include "md5.h"
@@ -282,6 +283,10 @@ void processUDPClientMessages() {
 		n = recvfrom(sockFDClient, buffer, BUFFER_SIZE, 0,
 				(struct sockaddr *) &cliAddr, &len);
 
+		if (n == 0) {
+			continue;
+		}
+
 		if (n == -1) {
 			keepReceiving = 0;
 			continue;
@@ -385,10 +390,12 @@ void *_threadDeleteOldEntries(void *arg) {
 void sendMessageTo(char *ip, int port, char *entry) {
 
 	struct sockaddr_in sa;
-	char bufferXTEA[1024];
+	char *bufferXTEA;
 	int blocks;
 
 	bzero(&sa, sizeof(sa));
+
+	bufferXTEA = (char*) malloc(sizeof(char) * 1024);
 
 	sa.sin_family = AF_INET;
 	sa.sin_addr.s_addr = inet_addr(ip);
@@ -399,20 +406,39 @@ void sendMessageTo(char *ip, int port, char *entry) {
 	sendto(sockFDClient, bufferXTEA, blocks * 8, 0,
 			(struct sockaddr*) &sa, sizeof(sa));
 
+	free(bufferXTEA);
+
 }
 
 void* _threadSendOldEvents(void *arg) {
 
+#define NUMBER_OF_ATTRIBUTES 30
+#define SIZE_OF_ATTRIBUTE 256
+#define SIZE_OF_BUFFER 1024
+
 	time_t timeVal, timeEntry = 0, lastTime = 0;
-	char sqFormat[200];
+	char *sqFormat;
 	const char *tail;
 	sqlite3_stmt *res;
 	char *attrName, *attrVal;
-	char* attributes[30][256], attributesValues[30][256];
+	char **attributes, **attributesValues;
 	int numberOfAttributes = 0, i;
-	char bufferAttr[1024], bufferEvent[1024];
+	char *bufferEvent, *bufferAttr;
 	int blocks;
-	Interpreter *interpreter;
+	Interpreter interpreter;
+
+	sqFormat = (char*) malloc(sizeof(char) * SIZE_OF_ATTRIBUTE);
+
+	attributes = (char**) malloc(sizeof(char*) * NUMBER_OF_ATTRIBUTES);
+	attributesValues = (char**) malloc(sizeof(char*) * NUMBER_OF_ATTRIBUTES);
+
+	for (i = 0; i < NUMBER_OF_ATTRIBUTES; i++) {
+		attributes[i] = (char*) malloc(sizeof(char) * SIZE_OF_ATTRIBUTE);
+		attributesValues[i] = (char*) malloc(sizeof(char) * SIZE_OF_ATTRIBUTE);
+	}
+
+	bufferEvent = (char*) malloc(sizeof(char) * SIZE_OF_BUFFER);
+	bufferAttr = (char*) malloc(sizeof(char) * SIZE_OF_BUFFER);
 
 	eventToSend *event = (eventToSend*) arg;
 
@@ -428,8 +454,8 @@ void* _threadSendOldEvents(void *arg) {
 
 	printf("Sending old events [%s]\n", sqFormat);
 
-	interpreter = interpreterCreate();
-	interpreterPrepare(interpreter);
+    interpreterCreate(&interpreter);
+	interpreterPrepare(&interpreter);
 
 	while (sqlite3_step(res) == SQLITE_ROW) {
 
@@ -447,7 +473,7 @@ void* _threadSendOldEvents(void *arg) {
 
 			for (i = 0; i < numberOfAttributes; i++) {
 
-				interpreterAddVariable(interpreter, attributes[i], attributesValues[i]);
+				interpreterAddVariable(&interpreter, attributes[i], attributesValues[i]);
 
 				if (i < (numberOfAttributes - 1)) {
 					sprintf(bufferAttr, "\"%s\": \"%s\", ", attributes[i], attributesValues[i]);
@@ -463,7 +489,7 @@ void* _threadSendOldEvents(void *arg) {
 
 			printf("Sending old event: %s [%s]\n", bufferEvent, event->condition);
 
-			if (interpreterGetConditionValue(interpreter, event->condition)) {
+			if (interpreterGetConditionValue(&interpreter, event->condition)) {
 
 				sendMessageTo(event->address, event->port, bufferEvent);
 
@@ -482,7 +508,7 @@ void* _threadSendOldEvents(void *arg) {
 
 	}
 
-	interpreterFree(interpreter);
+	interpreterFree(&interpreter);
 
 	sqlite3_finalize(res);
 
@@ -490,6 +516,19 @@ void* _threadSendOldEvents(void *arg) {
 	free(event->hash);
 	free(event->condition);
 	free(event);
+
+	for (i = 0; i < NUMBER_OF_ATTRIBUTES; i++) {
+		free(attributes[i]);
+		free(attributesValues[i]);
+	}
+
+	free(attributes);
+	free(attributesValues);
+
+	free(bufferEvent);
+	free(bufferAttr);
+
+	free(sqFormat);
 
 }
 
@@ -504,19 +543,25 @@ void* _threadConsumer(void *arg) {
 	time_t timeVal;
 	char *ip, *hash, *condition;
 	int port, sendToSubscriber;
-	Interpreter *interpreter;
+	Interpreter interpreter;
+	int running = 1;
 
-	interpreter = interpreterCreate();
-
-	while (1) {
+	while (running) {
 
 		DEBUG("Waiting event to the subscribers...");
 
 		entry = queuePop(1);
 
+		if (entry == NULL) {
+			running = 0;
+			continue;
+		}
+
+		interpreterCreate(&interpreter);
+
 		DEBUG("Preparing interpreter...");
 
-		interpreterPrepare(interpreter);
+		interpreterPrepare(&interpreter);
 
 		DEBUG("Getting subscribers...");
 
@@ -532,7 +577,7 @@ void* _threadConsumer(void *arg) {
 
 			DEBUG("attribute %s = %s", key, json_object_get_string(val));
 
-			interpreterAddVariable(interpreter, key, json_object_get_string(val));
+			interpreterAddVariable(&interpreter, key, json_object_get_string(val));
 
 		}
 
@@ -547,7 +592,11 @@ void* _threadConsumer(void *arg) {
 			condition = sqlite3_column_text(res, 4);
 			sendToSubscriber = 0;
 
-			sendToSubscriber = interpreterGetConditionValue(interpreter, condition);
+			if (strcmp(condition, "True") != 0) {
+				sendToSubscriber = interpreterGetConditionValue(&interpreter, condition);
+			} else {
+				sendToSubscriber = 1;
+			}
 
 			if (sendToSubscriber) {
 				printf("sendto %s %d\n", ip, port);
@@ -558,11 +607,13 @@ void* _threadConsumer(void *arg) {
 
 		}
 
-		interpreterFree(interpreter);
-
 		sqlite3_finalize(res);
 
 		queueFreeEntry(entry);
+
+		//free(interpreter);
+
+		interpreterFree(&interpreter);
 
 	}
 
@@ -576,7 +627,18 @@ void startThreads() {
 
 }
 
+void catchSignal(int signo) {
+
+	DEBUG("Exit...");
+
+	queueDontWaitMore();
+	close(sockFDClient);
+
+}
+
 int main(int argc, char **argv) {
+
+	signal(SIGINT, catchSignal);
 
 	interpreterGlobalLoad();
 
